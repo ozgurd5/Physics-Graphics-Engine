@@ -1,7 +1,8 @@
-﻿cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 4.2)
 project(GraphicsEngine)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_C_STANDARD 11)
 
 include(FetchContent)
 
@@ -23,14 +24,25 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+find_package(OpenMP)
+
 add_executable(GraphicsEngine
         src/main.cpp
         src/graphics_engine.cpp
-        src/simulation_engine.c
         src/glad.c
+        src/fluid_graphics/core.c
+        src/fluid_graphics/boundaries.c
+        src/fluid_graphics/scenarios.c
+        src/fluid_graphics/preconditioners.c
         include/glad/glad.h
         include/KHR/khrplatform.h)
 
-target_include_directories(GraphicsEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(GraphicsEngine PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid_graphics)
 
 target_link_libraries(GraphicsEngine PRIVATE glfw glm::glm)
+
+if(OpenMP_C_FOUND)
+    target_link_libraries(GraphicsEngine PRIVATE OpenMP::OpenMP_C)
+endif()
