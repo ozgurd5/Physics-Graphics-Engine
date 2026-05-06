@@ -1,4 +1,4 @@
-#include "graphics_engine.h"
+#include "graphics_engine.hpp"
 
 extern "C" {
 #include "types.h"

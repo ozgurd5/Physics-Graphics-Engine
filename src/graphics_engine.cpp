@@ -1,5 +1,5 @@
-#include "graphics_engine.h"
-#include "colormap.h"
+#include "graphics_engine.hpp"
+#include "colormap.hpp"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <fstream>
