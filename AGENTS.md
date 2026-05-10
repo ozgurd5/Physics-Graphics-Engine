@@ -2,7 +2,7 @@
 
 This project's **C++ graphics code** follows these rules. Apply them at all times.
 
-The **C fluid simulation under `src/fluid_graphics/`** is owned by a separate developer and is **read-only** — these rules do not govern that code, and it must not be modified, reformatted, or refactored. Read it only for understanding.
+The **C fluid simulation under `src/fluid_physics/`** is owned by a separate developer and is **read-only** — these rules do not govern that code, and it must not be modified, reformatted, or refactored. Read it only for understanding.
 
 ## Formatting
 
@@ -339,7 +339,7 @@ When working in an existing file, match its style: comment frequency, blank line
 
 This applies doubly to:
 
-- `src/fluid_graphics/` — read-only, do not edit at all.
+- `src/fluid_physics/` — read-only, do not edit at all.
 - `src/graphics_engine.{hpp,cpp}` and `src/main.cpp` — pre-existing PascalCase / `m_` style. Edit when the task requires it, but don't reformat the surrounding style.
 
 ## Identifiers and Keys

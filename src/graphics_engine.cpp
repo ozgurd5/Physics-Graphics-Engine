@@ -85,7 +85,7 @@ void Renderer::UpdateArrows(const float* u, const float* v, int w, int h, int st
     {
         for (int j = stride / 2; j < h; j += stride)
         {
-            // Cell-centered velocity from staggered grid (matches IX_U / IX_V layout in fluid_graphics).
+            // Cell-centered velocity from staggered grid (matches IX_U / IX_V layout in fluid_physics).
             float u_c = 0.5f * (u[(size_t)i * u_stride + j] + u[(size_t)(i + 1) * u_stride + j]);
             float v_c = 0.5f * (v[(size_t)i * v_stride + j] + v[(size_t)i * v_stride + (j + 1)]);
 

@@ -37,10 +37,10 @@ add_executable(GraphicsEngine
         src/main.cpp
         src/graphics_engine.cpp
         src/glad.c
-        src/fluid_graphics/core.c
-        src/fluid_graphics/boundaries.c
-        src/fluid_graphics/scenarios.c
-        src/fluid_graphics/preconditioners.c
+        src/fluid_physics/core.c
+        src/fluid_physics/boundaries.c
+        src/fluid_physics/scenarios.c
+        src/fluid_physics/preconditioners.c
         ${imgui_SOURCE_DIR}/imgui.cpp
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
@@ -52,7 +52,7 @@ add_executable(GraphicsEngine
 
 target_include_directories(GraphicsEngine PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid_graphics
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid_physics
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends)
 
