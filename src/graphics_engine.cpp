@@ -176,9 +176,9 @@ void Renderer::Draw(VisMode mode)
         glUseProgram(m_FieldShader);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_FieldTex);
-        glUniform1i(glGetUniformLocation(m_FieldShader, "u_Field"), 0);
-        glUniform1f(glGetUniformLocation(m_FieldShader, "u_RangeMin"), m_RangeMin);
-        glUniform1f(glGetUniformLocation(m_FieldShader, "u_RangeMax"), m_RangeMax);
+        glUniform1i(glGetUniformLocation(m_FieldShader, "u_field"), 0);
+        glUniform1f(glGetUniformLocation(m_FieldShader, "u_range_min"), m_RangeMin);
+        glUniform1f(glGetUniformLocation(m_FieldShader, "u_range_max"), m_RangeMax);
 
         glBindVertexArray(m_QuadVAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);

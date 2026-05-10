@@ -560,6 +560,57 @@ shader_program shader{ vert_source, frag_source };
 
 GPU-resource wrappers must be **non-copyable** (`= delete` the copy constructor and copy assignment). Make them move-only when transferring ownership is meaningful; make them non-movable when the type represents a single fixed instance (the existing `Renderer` in `src/graphics_engine.hpp` is non-copyable and non-movable for this reason).
 
+## Shaders (GLSL)
+
+Use **Hungarian-style stage prefixes** for cross-stage shader identifiers:
+
+- **`a_`** — vertex attributes (inputs from a vertex buffer): `a_position`, `a_tex_coord`, `a_normal`, `a_color`.
+- **`v_`** — varyings (vertex shader `out` / fragment shader `in`): `v_tex_coord`, `v_world_pos`, `v_color`.
+- **`u_`** — uniforms: `u_field`, `u_range_min`, `u_model`, `u_time`.
+- **`frag_color`** — the fragment shader's color output.
+
+The rest of the name follows snake_case: `a_tex_coord`, not `aTexCoord` or `a_TexCoord`. Built-in identifiers like `gl_Position` and `gl_FragCoord` are not user-defined and keep their spec form.
+
+Function-local variables in GLSL follow the same rules as C++ locals: plain snake_case, no stage prefixes, no single-letter names except integer loop indices.
+
+```glsl
+// vertex shader
+layout (location = 0) in vec2 a_position;
+layout (location = 1) in vec2 a_tex_coord;
+out vec2 v_tex_coord;
+
+uniform mat4 u_view_projection;
+
+void main()
+{
+    gl_Position = u_view_projection * vec4(a_position, 0.0, 1.0);
+    v_tex_coord = a_tex_coord;
+}
+
+// fragment shader
+in vec2 v_tex_coord;
+out vec4 frag_color;
+
+uniform sampler2D u_field;
+
+void main()
+{
+    frag_color = texture(u_field, v_tex_coord);
+}
+```
+
+Why prefixes here but not for C++ members? In C++, `m_` says "this is a member" — already obvious from class context. In GLSL, the prefix carries actual semantic information about data flow (where the value comes from), and the `in` / `out` / `uniform` qualifiers can be easy to overlook in long shaders. The prefix is a useful redundancy.
+
+Standard formatting rules (4-space indentation, Allman braces, no alignment padding, no magic numbers, comments only for non-obvious intent) apply to GLSL the same as to C++.
+
+## Convention Defaults
+
+If a convention is not defined in these rules, choose the **most common and popular** one for the language or context. Look to: the dominant tutorials, the most widely-used books, major open-source projects in the space, or the language's standard library and canonical examples.
+
+Avoid one-off hybrids that don't match any established style — they confuse readers who already know the field, and they're hard to justify in code review.
+
+When in doubt, ask.
+
 ## General Mindset
 
 Good code is readable code. Prefer better naming and structure over compensating with comments. Change only what needs to change.
