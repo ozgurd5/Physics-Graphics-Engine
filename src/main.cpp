@@ -21,7 +21,7 @@ constexpr float pi = 3.14159265358979323846f;
 
 struct RuntimeControls
 {
-    VisMode mode = VisMode::Smoke;
+    vis_mode mode = vis_mode::smoke;
     ScenarioType scenarioType = KARMAN_VORTEX;
     int substepsPerFrame = 5;
     int arrowStride = 8;
@@ -139,12 +139,12 @@ void DrawControlPanel(RuntimeControls& ctrl, FluidContext* ctx, ScenarioParams& 
 
     ImGui::Text("Visualization");
     int mode = (int)ctrl.mode;
-    ImGui::RadioButton("Smoke",           &mode, (int)VisMode::Smoke);
-    ImGui::RadioButton("Pressure",        &mode, (int)VisMode::Pressure);
-    ImGui::RadioButton("Velocity Mag",    &mode, (int)VisMode::VelocityMagnitude);
-    ImGui::RadioButton("Vectors Only",    &mode, (int)VisMode::VelocityVectorsOnly);
-    ImGui::RadioButton("Field + Vectors", &mode, (int)VisMode::FieldPlusVectors);
-    ctrl.mode = (VisMode)mode;
+    ImGui::RadioButton("Smoke",           &mode, (int)vis_mode::smoke);
+    ImGui::RadioButton("Pressure",        &mode, (int)vis_mode::pressure);
+    ImGui::RadioButton("Velocity Mag",    &mode, (int)vis_mode::velocity_magnitude);
+    ImGui::RadioButton("Vectors Only",    &mode, (int)vis_mode::velocity_vectors_only);
+    ImGui::RadioButton("Field + Vectors", &mode, (int)vis_mode::field_plus_vectors);
+    ctrl.mode = (vis_mode)mode;
     ImGui::Separator();
 
     static const char* scenario_items[] = { "Lid-Driven", "Karman Vortex", "Airfoil", "Urban City" };
@@ -210,7 +210,7 @@ void DrawControlPanel(RuntimeControls& ctrl, FluidContext* ctx, ScenarioParams& 
 
 int main()
 {
-    Renderer renderer(800, 800, "Fluid Simulation");
+    graphics_engine engine(800, 800, "Fluid Simulation");
 
     FluidContext* ctx = fluid_create_context(256, 256, 0.016f, 0.1f, 1.0f, 0.001f, 100, 1e-4f);
 
@@ -225,7 +225,7 @@ int main()
     double lastTime   = glfwGetTime();
     double titleTimer = 0.0;
 
-    while (!renderer.ShouldClose())
+    while (!engine.should_close())
     {
         double now = glfwGetTime();
         double dt  = now - lastTime;
@@ -238,7 +238,7 @@ int main()
         for (int s = 0; s < ctrl.substepsPerFrame; ++s)
             fluid_step(ctx, params, scenario);
 
-        renderer.BeginUI();
+        engine.begin_ui();
         DrawControlPanel(ctrl, ctx, params);
 
         if (ctrl.requestReset || ctrl.requestRebuildScenario)
@@ -255,40 +255,40 @@ int main()
 
         switch (ctrl.mode)
         {
-            case VisMode::Smoke:
-                renderer.UpdateField(ctx->smoke, w, h, 0.0f, 1.0f);
+            case vis_mode::smoke:
+                engine.update_field(ctx->smoke, w, h, 0.0f, 1.0f);
                 break;
-            case VisMode::Pressure:
+            case vis_mode::pressure:
             {
                 float pmin, pmax;
                 scan_min_max(ctx->p, ctx->num_cells, pmin, pmax);
                 if (pmax - pmin < 1e-6f) { pmin = 0.0f; pmax = 1.0f; }
-                renderer.UpdateField(ctx->p, w, h, pmin, pmax);
+                engine.update_field(ctx->p, w, h, pmin, pmax);
                 break;
             }
-            case VisMode::VelocityMagnitude:
-            case VisMode::FieldPlusVectors:
+            case vis_mode::velocity_magnitude:
+            case vis_mode::field_plus_vectors:
             {
                 float vmin, vmax;
                 compute_velocity_magnitude(ctx, velMag.data(), vmin, vmax);
-                renderer.UpdateField(velMag.data(), w, h, vmin, vmax);
+                engine.update_field(velMag.data(), w, h, vmin, vmax);
                 break;
             }
-            case VisMode::VelocityVectorsOnly:
+            case vis_mode::velocity_vectors_only:
                 break;
         }
 
-        if (ctrl.mode == VisMode::VelocityVectorsOnly || ctrl.mode == VisMode::FieldPlusVectors)
-            renderer.UpdateArrows(ctx->u, ctx->v, w, h, ctrl.arrowStride, ctrl.arrowScale);
+        if (ctrl.mode == vis_mode::velocity_vectors_only || ctrl.mode == vis_mode::field_plus_vectors)
+            engine.update_arrows(ctx->u, ctx->v, w, h, ctrl.arrowStride, ctrl.arrowScale);
 
-        renderer.Draw(ctrl.mode);
+        engine.draw(ctrl.mode);
 
         titleTimer += dt;
         if (titleTimer > 0.5)
         {
             char buf[80];
             std::snprintf(buf, sizeof(buf), "Fluid Simulation - %.1f FPS", 1.0 / (dt > 0.0 ? dt : 1.0));
-            glfwSetWindowTitle(renderer.Window(), buf);
+            glfwSetWindowTitle(engine.window(), buf);
             titleTimer = 0.0;
         }
     }

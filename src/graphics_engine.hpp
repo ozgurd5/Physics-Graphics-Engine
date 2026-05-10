@@ -2,63 +2,63 @@
 
 struct GLFWwindow;
 
-enum class VisMode
+enum class vis_mode
 {
-    Smoke,
-    Pressure,
-    VelocityMagnitude,
-    VelocityVectorsOnly,
-    FieldPlusVectors,
+    smoke,
+    pressure,
+    velocity_magnitude,
+    velocity_vectors_only,
+    field_plus_vectors,
 };
 
-class Renderer
+class graphics_engine
 {
 public:
-    Renderer(int width, int height, const char* title);
-    ~Renderer();
+    graphics_engine(int width, int height, const char* title);
+    ~graphics_engine();
 
-    Renderer(const Renderer&)            = delete;
-    Renderer& operator=(const Renderer&) = delete;
+    graphics_engine(const graphics_engine&) = delete;
+    graphics_engine& operator=(const graphics_engine&) = delete;
 
-    bool        ShouldClose() const;
-    GLFWwindow* Window() const { return m_Window; }
+    bool should_close() const;
+    GLFWwindow* window() const { return glfw_window; }
 
     // Upload a scalar field to an R32F texture; range used to normalize for the colormap.
-    void UpdateField(const float* data, int w, int h, float rangeMin, float rangeMax);
+    void update_field(const float* data, int width, int height, float range_min, float range_max);
 
     // Build arrow line segments from staggered velocity field.
     // stride: sample every Nth cell. scale: shaft length per unit velocity, in NDC units.
-    void UpdateArrows(const float* u, const float* v, int w, int h, int stride, float scale);
+    void update_arrows(const float* u, const float* v, int width, int height, int stride, float scale);
 
     // Begin an ImGui frame (call before ImGui widget code).
-    void BeginUI();
+    void begin_ui();
 
     // Run field/arrow passes per mode, render UI, swap buffers, poll events.
-    void Draw(VisMode mode);
+    void draw(vis_mode mode);
 
 private:
-    static unsigned int CompileShader(const char* vertPath, const char* fragPath);
-    void                CreateQuad();
-    void                CreateFieldTexture(int w, int h);
-    void                CreateArrowBuffer();
-    void                InitImGui();
-    void                ShutdownImGui();
+    static unsigned int compile_shader(const char* vert_path, const char* frag_path);
+    void create_quad();
+    void create_field_texture(int width, int height);
+    void create_arrow_buffer();
+    void init_imgui();
+    void shutdown_imgui();
 
-    GLFWwindow*  m_Window         = nullptr;
+    GLFWwindow* glfw_window = nullptr;
 
-    unsigned int m_FieldShader    = 0;
-    unsigned int m_QuadVAO        = 0;
-    unsigned int m_QuadVBO        = 0;
-    unsigned int m_QuadIBO        = 0;
-    unsigned int m_FieldTex       = 0;
-    int          m_FieldW         = 0;
-    int          m_FieldH         = 0;
-    float        m_RangeMin       = 0.0f;
-    float        m_RangeMax       = 1.0f;
+    unsigned int field_shader = 0;
+    unsigned int quad_vao = 0;
+    unsigned int quad_vbo = 0;
+    unsigned int quad_ibo = 0;
+    unsigned int field_texture = 0;
+    int field_width = 0;
+    int field_height = 0;
+    float range_min = 0.0f;
+    float range_max = 1.0f;
 
-    unsigned int m_ArrowShader    = 0;
-    unsigned int m_ArrowVAO       = 0;
-    unsigned int m_ArrowVBO       = 0;
-    int          m_ArrowVertCount = 0;
-    int          m_ArrowVBOCap    = 0;
+    unsigned int arrow_shader = 0;
+    unsigned int arrow_vao = 0;
+    unsigned int arrow_vbo = 0;
+    int arrow_vert_count = 0;
+    int arrow_vbo_capacity = 0;
 };

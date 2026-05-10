@@ -200,10 +200,6 @@ This project uses **snake_case** for almost everything. The only universally-upp
 - **Constants and `constexpr`:** `constexpr int max_lights = 32;`.
 - **Macros (rare; only conditional compilation or platform shims):** `OPENGL_DEBUG`, `PLATFORM_WINDOWS`.
 
-### Pre-existing PascalCase code
-
-The existing `Renderer` class in `src/graphics_engine.{hpp,cpp}` and `src/main.cpp` use PascalCase methods (`UpdateField`, `Draw`, `BeginUI`) and `m_*` member prefixes. **That style is grandfathered** — leave it untouched, do not reformat it, and don't try to make new code match it. Any new types, members, or methods follow the snake_case rules above.
-
 ### Names must be short *and* understandable
 
 A name is short enough when it carries no filler and long enough when a reader does not have to guess what it refers to. Never collapse a meaningful noun to one or two letters. `f` for `feature`, `fud` for `feature_unlock_data`, `lm` for `level_manager`: none of these save the human anything, and the computer does not care. Type out the word.
@@ -337,10 +333,7 @@ The bar is "does naming this step explain something the bare arithmetic doesn't.
 
 When working in an existing file, match its style: comment frequency, blank line usage, naming conventions, etc. Do not rewrite or reformat code that isn't broken or directly related to the task.
 
-This applies doubly to:
-
-- `src/fluid_physics/` — read-only, do not edit at all.
-- `src/graphics_engine.{hpp,cpp}` and `src/main.cpp` — pre-existing PascalCase / `m_` style. Edit when the task requires it, but don't reformat the surrounding style.
+This applies doubly to `src/fluid_physics/` — read-only, do not edit at all.
 
 ## Identifiers and Keys
 
@@ -558,7 +551,7 @@ shader_program shader{ vert_source, frag_source };
 // destructor cleans up automatically
 ```
 
-GPU-resource wrappers must be **non-copyable** (`= delete` the copy constructor and copy assignment). Make them move-only when transferring ownership is meaningful; make them non-movable when the type represents a single fixed instance (the existing `Renderer` in `src/graphics_engine.hpp` is non-copyable and non-movable for this reason).
+GPU-resource wrappers must be **non-copyable** (`= delete` the copy constructor and copy assignment). Make them move-only when transferring ownership is meaningful; make them non-movable when the type represents a single fixed instance (the `graphics_engine` in `src/graphics_engine.hpp` is non-copyable and non-movable for this reason).
 
 ## Shaders (GLSL)
 

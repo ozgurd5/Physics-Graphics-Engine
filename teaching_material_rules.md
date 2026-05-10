@@ -84,7 +84,7 @@ When you establish a format for a category of items (e.g. *Runs / Job / Used for
 Reformat the awkward ones to fit the pattern. Do not break the pattern for one item.
 
 ### 11. No file-and-line code references
-Do not use volatile references like `[main.cpp:42](src/main.cpp:42)` or `Renderer::CompileShader in graphics_engine.cpp`. Codebases change; teaching material should remain stable across edits to the code.
+Do not use volatile references like `[main.cpp:42](src/main.cpp:42)` or `graphics_engine::compile_shader in graphics_engine.cpp`. Codebases change; teaching material should remain stable across edits to the code.
 
 Refer to project components **generically** instead: "our renderer," "the simulation library," "the shader-compile helper." Names and paths can shift; the teaching value should not.
 
