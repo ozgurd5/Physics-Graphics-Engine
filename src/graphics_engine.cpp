@@ -1,12 +1,15 @@
 #include "graphics_engine.hpp"
-#include "colormap.hpp"
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <vector>
-
-// ─── Internal helpers ────────────────────────────────────────────────────────
 
 static std::string ReadFile(const char* path)
 {
@@ -15,8 +18,6 @@ static std::string ReadFile(const char* path)
     ss << f.rdbuf();
     return ss.str();
 }
-
-// ─── Renderer ────────────────────────────────────────────────────────────────
 
 Renderer::Renderer(int width, int height, const char* title)
 {
@@ -29,18 +30,25 @@ Renderer::Renderer(int width, int height, const char* title)
     glfwMakeContextCurrent(m_Window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 
-    m_Shader = CompileShader("assets/shaders/smoke.vert", "assets/shaders/smoke.frag");
+    m_FieldShader = CompileShader("assets/shaders/field.vert", "assets/shaders/field.frag");
+    m_ArrowShader = CompileShader("assets/shaders/arrow.vert", "assets/shaders/arrow.frag");
     CreateQuad();
-    // Smoke texture is created on the first UpdateSmoke() call once we know the grid size.
+    CreateArrowBuffer();
+    InitImGui();
 }
 
 Renderer::~Renderer()
 {
-    glDeleteTextures(1, &m_SmokeTexture);
-    glDeleteVertexArrays(1, &m_VAO);
-    glDeleteBuffers(1, &m_VBO);
-    glDeleteBuffers(1, &m_IBO);
-    glDeleteProgram(m_Shader);
+    ShutdownImGui();
+    glDeleteTextures(1, &m_FieldTex);
+    glDeleteVertexArrays(1, &m_QuadVAO);
+    glDeleteBuffers(1, &m_QuadVBO);
+    glDeleteBuffers(1, &m_QuadIBO);
+    glDeleteVertexArrays(1, &m_ArrowVAO);
+    glDeleteBuffers(1, &m_ArrowVBO);
+    glDeleteProgram(m_FieldShader);
+    glDeleteProgram(m_ArrowShader);
+    glfwDestroyWindow(m_Window);
     glfwTerminate();
 }
 
@@ -49,47 +57,155 @@ bool Renderer::ShouldClose() const
     return glfwWindowShouldClose(m_Window);
 }
 
-void Renderer::UpdateSmoke(const float* smokeData, int width, int height)
+void Renderer::UpdateField(const float* data, int w, int h, float rangeMin, float rangeMax)
 {
-    if (m_SmokeTexture == 0)
-        CreateSmokeTexture(width, height);
+    if (m_FieldTex == 0 || w != m_FieldW || h != m_FieldH)
+        CreateFieldTexture(w, h);
 
-    // Build RGBA pixel buffer using the turbo colormap.
-    std::vector<RGBA> pixels(width * height);
-    for (int i = 0; i < width * height; ++i)
-        pixels[i] = turbo_colormap(smokeData[i]);
+    m_RangeMin = rangeMin;
+    m_RangeMax = rangeMax;
 
-    glBindTexture(GL_TEXTURE_2D, m_SmokeTexture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
-                    GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, m_FieldTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, data);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void Renderer::Draw()
+void Renderer::UpdateArrows(const float* u, const float* v, int w, int h, int stride, float scale)
 {
+    if (stride < 1) stride = 1;
+
+    std::vector<float> verts;
+    verts.reserve(((size_t)(w / stride) * (h / stride)) * 12);
+
+    const size_t u_stride = (size_t)h;
+    const size_t v_stride = (size_t)h + 1;
+
+    for (int i = stride / 2; i < w; i += stride)
+    {
+        for (int j = stride / 2; j < h; j += stride)
+        {
+            // Cell-centered velocity from staggered grid (matches IX_U / IX_V layout in fluid_graphics).
+            float u_c = 0.5f * (u[(size_t)i * u_stride + j] + u[(size_t)(i + 1) * u_stride + j]);
+            float v_c = 0.5f * (v[(size_t)i * v_stride + j] + v[(size_t)i * v_stride + (j + 1)]);
+
+            // After the UV swap in field.frag, screen-X = sim-i and screen-Y = sim-j.
+            float base_x = 2.0f * ((float)i + 0.5f) / (float)w - 1.0f;
+            float base_y = 2.0f * ((float)j + 0.5f) / (float)h - 1.0f;
+
+            float dx    = u_c * scale;
+            float dy    = v_c * scale;
+            float tip_x = base_x + dx;
+            float tip_y = base_y + dy;
+
+            // Shaft
+            verts.push_back(base_x); verts.push_back(base_y);
+            verts.push_back(tip_x);  verts.push_back(tip_y);
+
+            // Arrowhead — two wing line segments
+            float len = std::sqrt(dx * dx + dy * dy);
+            if (len > 1e-6f)
+            {
+                float inv_len  = 1.0f / len;
+                float nx       = dx * inv_len;
+                float ny       = dy * inv_len;
+                float head_len = 0.3f * len;
+                float px       = -ny;
+                float py       = nx;
+
+                float w1x = tip_x - nx * head_len + px * head_len * 0.5f;
+                float w1y = tip_y - ny * head_len + py * head_len * 0.5f;
+                float w2x = tip_x - nx * head_len - px * head_len * 0.5f;
+                float w2y = tip_y - ny * head_len - py * head_len * 0.5f;
+
+                verts.push_back(tip_x); verts.push_back(tip_y);
+                verts.push_back(w1x);   verts.push_back(w1y);
+                verts.push_back(tip_x); verts.push_back(tip_y);
+                verts.push_back(w2x);   verts.push_back(w2y);
+            }
+            else
+            {
+                for (int k = 0; k < 4; ++k)
+                {
+                    verts.push_back(tip_x);
+                    verts.push_back(tip_y);
+                }
+            }
+        }
+    }
+
+    int vertCount = (int)(verts.size() / 2);
+    int byteSize  = (int)(verts.size() * sizeof(float));
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_ArrowVBO);
+    if (vertCount > m_ArrowVBOCap)
+    {
+        glBufferData(GL_ARRAY_BUFFER, byteSize, verts.data(), GL_DYNAMIC_DRAW);
+        m_ArrowVBOCap = vertCount;
+    }
+    else
+    {
+        glBufferSubData(GL_ARRAY_BUFFER, 0, byteSize, verts.data());
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    m_ArrowVertCount = vertCount;
+}
+
+void Renderer::BeginUI()
+{
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
+void Renderer::Draw(VisMode mode)
+{
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glUseProgram(m_Shader);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_SmokeTexture);
-    glUniform1i(glGetUniformLocation(m_Shader, "u_Smoke"), 0);
+    const bool drawField  = (mode == VisMode::Smoke ||
+                             mode == VisMode::Pressure ||
+                             mode == VisMode::VelocityMagnitude ||
+                             mode == VisMode::FieldPlusVectors);
+    const bool drawArrows = (mode == VisMode::VelocityVectorsOnly ||
+                             mode == VisMode::FieldPlusVectors);
 
-    glBindVertexArray(m_VAO);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
-    glBindVertexArray(0);
+    if (drawField && m_FieldTex != 0)
+    {
+        glUseProgram(m_FieldShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_FieldTex);
+        glUniform1i(glGetUniformLocation(m_FieldShader, "u_Field"), 0);
+        glUniform1f(glGetUniformLocation(m_FieldShader, "u_RangeMin"), m_RangeMin);
+        glUniform1f(glGetUniformLocation(m_FieldShader, "u_RangeMax"), m_RangeMax);
+
+        glBindVertexArray(m_QuadVAO);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
+    }
+
+    if (drawArrows && m_ArrowVertCount > 0)
+    {
+        glUseProgram(m_ArrowShader);
+        glBindVertexArray(m_ArrowVAO);
+        glDrawArrays(GL_LINES, 0, m_ArrowVertCount);
+        glBindVertexArray(0);
+    }
+
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(m_Window);
     glfwPollEvents();
 }
 
-// ─── Private ─────────────────────────────────────────────────────────────────
-
 unsigned int Renderer::CompileShader(const char* vertPath, const char* fragPath)
 {
     std::string vertSrc = ReadFile(vertPath);
     std::string fragSrc = ReadFile(fragPath);
-    const char* vSrc = vertSrc.c_str();
-    const char* fSrc = fragSrc.c_str();
+    const char* vSrc    = vertSrc.c_str();
+    const char* fSrc    = fragSrc.c_str();
 
     unsigned int vert = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vert, 1, &vSrc, nullptr);
@@ -112,50 +228,79 @@ unsigned int Renderer::CompileShader(const char* vertPath, const char* fragPath)
 
 void Renderer::CreateQuad()
 {
-    // Fullscreen quad in NDC. Each vertex: [x, y, u, v].
     float vertices[] = {
-        -1.0f, -1.0f,  0.0f, 0.0f,  // bottom-left
-         1.0f, -1.0f,  1.0f, 0.0f,  // bottom-right
-         1.0f,  1.0f,  1.0f, 1.0f,  // top-right
-        -1.0f,  1.0f,  0.0f, 1.0f,  // top-left
+        -1.0f, -1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
+         1.0f,  1.0f, 1.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f,
     };
     unsigned int indices[] = { 0, 1, 2, 2, 3, 0 };
 
-    glGenVertexArrays(1, &m_VAO);
-    glGenBuffers(1, &m_VBO);
-    glGenBuffers(1, &m_IBO);
+    glGenVertexArrays(1, &m_QuadVAO);
+    glGenBuffers(1, &m_QuadVBO);
+    glGenBuffers(1, &m_QuadIBO);
 
-    glBindVertexArray(m_VAO);
+    glBindVertexArray(m_QuadVAO);
 
-    glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_QuadVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_QuadIBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
-    // location 0: position (xy)
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(0);
 
-    // location 1: tex coord (uv)
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
     glBindVertexArray(0);
 }
 
-void Renderer::CreateSmokeTexture(int width, int height)
+void Renderer::CreateFieldTexture(int w, int h)
 {
-    m_SimWidth  = width;
-    m_SimHeight = height;
+    if (m_FieldTex != 0)
+        glDeleteTextures(1, &m_FieldTex);
 
-    glGenTextures(1, &m_SmokeTexture);
-    glBindTexture(GL_TEXTURE_2D, m_SmokeTexture);
+    m_FieldW = w;
+    m_FieldH = h;
+
+    glGenTextures(1, &m_FieldTex);
+    glBindTexture(GL_TEXTURE_2D, m_FieldTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, nullptr);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Renderer::CreateArrowBuffer()
+{
+    glGenVertexArrays(1, &m_ArrowVAO);
+    glGenBuffers(1, &m_ArrowVBO);
+
+    glBindVertexArray(m_ArrowVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_ArrowVBO);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(0);
+}
+
+void Renderer::InitImGui()
+{
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(m_Window, true);
+    ImGui_ImplOpenGL3_Init("#version 460");
+}
+
+void Renderer::ShutdownImGui()
+{
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 }

@@ -24,6 +24,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.91.5
+)
+FetchContent_MakeAvailable(imgui)
+
 find_package(OpenMP)
 
 add_executable(GraphicsEngine
@@ -34,15 +41,26 @@ add_executable(GraphicsEngine
         src/fluid_graphics/boundaries.c
         src/fluid_graphics/scenarios.c
         src/fluid_graphics/preconditioners.c
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
         include/glad/glad.h
         include/KHR/khrplatform.h)
 
 target_include_directories(GraphicsEngine PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid_graphics)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/fluid_graphics
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends)
 
 target_link_libraries(GraphicsEngine PRIVATE glfw glm::glm)
 
 if(OpenMP_C_FOUND)
     target_link_libraries(GraphicsEngine PRIVATE OpenMP::OpenMP_C)
+endif()
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(GraphicsEngine PRIVATE OpenMP::OpenMP_CXX)
 endif()
