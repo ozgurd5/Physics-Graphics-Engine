@@ -21,7 +21,7 @@ constexpr float pi = 3.14159265358979323846f;
 
 struct RuntimeControls
 {
-    vis_mode mode = vis_mode::smoke;
+    visual_mode mode = visual_mode::smoke;
     ScenarioType scenarioType = KARMAN_VORTEX;
     int substepsPerFrame = 5;
     int arrowStride = 8;
@@ -139,12 +139,12 @@ void DrawControlPanel(RuntimeControls& ctrl, FluidContext* ctx, ScenarioParams& 
 
     ImGui::Text("Visualization");
     int mode = (int)ctrl.mode;
-    ImGui::RadioButton("Smoke",           &mode, (int)vis_mode::smoke);
-    ImGui::RadioButton("Pressure",        &mode, (int)vis_mode::pressure);
-    ImGui::RadioButton("Velocity Mag",    &mode, (int)vis_mode::velocity_magnitude);
-    ImGui::RadioButton("Vectors Only",    &mode, (int)vis_mode::velocity_vectors_only);
-    ImGui::RadioButton("Field + Vectors", &mode, (int)vis_mode::field_plus_vectors);
-    ctrl.mode = (vis_mode)mode;
+    ImGui::RadioButton("Smoke",           &mode, (int)visual_mode::smoke);
+    ImGui::RadioButton("Pressure",        &mode, (int)visual_mode::pressure);
+    ImGui::RadioButton("Velocity Mag",    &mode, (int)visual_mode::velocity_magnitude);
+    ImGui::RadioButton("Vectors Only",    &mode, (int)visual_mode::velocity_vectors_only);
+    ImGui::RadioButton("Field + Vectors", &mode, (int)visual_mode::field_plus_vectors);
+    ctrl.mode = (visual_mode)mode;
     ImGui::Separator();
 
     static const char* scenario_items[] = { "Lid-Driven", "Karman Vortex", "Airfoil", "Urban City" };
@@ -255,10 +255,10 @@ int main()
 
         switch (ctrl.mode)
         {
-            case vis_mode::smoke:
+            case visual_mode::smoke:
                 engine.update_field(ctx->smoke, w, h, 0.0f, 1.0f);
                 break;
-            case vis_mode::pressure:
+            case visual_mode::pressure:
             {
                 float pmin, pmax;
                 scan_min_max(ctx->p, ctx->num_cells, pmin, pmax);
@@ -266,19 +266,19 @@ int main()
                 engine.update_field(ctx->p, w, h, pmin, pmax);
                 break;
             }
-            case vis_mode::velocity_magnitude:
-            case vis_mode::field_plus_vectors:
+            case visual_mode::velocity_magnitude:
+            case visual_mode::field_plus_vectors:
             {
                 float vmin, vmax;
                 compute_velocity_magnitude(ctx, velMag.data(), vmin, vmax);
                 engine.update_field(velMag.data(), w, h, vmin, vmax);
                 break;
             }
-            case vis_mode::velocity_vectors_only:
+            case visual_mode::velocity_vectors_only:
                 break;
         }
 
-        if (ctrl.mode == vis_mode::velocity_vectors_only || ctrl.mode == vis_mode::field_plus_vectors)
+        if (ctrl.mode == visual_mode::velocity_vectors_only || ctrl.mode == visual_mode::field_plus_vectors)
             engine.update_arrows(ctx->u, ctx->v, w, h, ctrl.arrowStride, ctrl.arrowScale);
 
         engine.draw(ctrl.mode);

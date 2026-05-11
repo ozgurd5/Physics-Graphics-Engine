@@ -2,7 +2,7 @@
 
 struct GLFWwindow;
 
-enum class vis_mode
+enum class visual_mode
 {
     smoke,
     pressure,
@@ -20,29 +20,21 @@ public:
     graphics_engine(const graphics_engine&) = delete;
     graphics_engine& operator=(const graphics_engine&) = delete;
 
-    bool should_close() const;
-    GLFWwindow* window() const { return glfw_window; }
+    [[nodiscard]] bool should_close() const;
+    [[nodiscard]] GLFWwindow* window() const { return glfw_window; }
 
-    // Upload a scalar field to an R32F texture; range used to normalize for the colormap.
     void update_field(const float* data, int width, int height, float range_min, float range_max);
-
-    // Build arrow line segments from staggered velocity field.
-    // stride: sample every Nth cell. scale: shaft length per unit velocity, in NDC units.
     void update_arrows(const float* u, const float* v, int width, int height, int stride, float scale);
-
-    // Begin an ImGui frame (call before ImGui widget code).
-    void begin_ui();
-
-    // Run field/arrow passes per mode, render UI, swap buffers, poll events.
-    void draw(vis_mode mode);
+    void begin_ui() const;
+    void draw(visual_mode mode) const;
 
 private:
-    static unsigned int compile_shader(const char* vert_path, const char* frag_path);
+    [[nodiscard]] static unsigned int compile_shader(const char* vert_path, const char* frag_path);
     void create_quad();
-    void create_field_texture(int width, int height);
     void create_arrow_buffer();
-    void init_imgui();
-    void shutdown_imgui();
+    void init_imgui() const;
+    void shutdown_imgui() const;
+    void create_field_texture(int width, int height);
 
     GLFWwindow* glfw_window = nullptr;
 

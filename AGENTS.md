@@ -248,6 +248,39 @@ void render_optional(const mesh* m);    // null is valid input
 
 A reader should be able to tell from the signature alone whether they need to handle null — references say "no", pointers say "maybe".
 
+## Const-correctness
+
+Default to `const` everywhere it doesn't fight you — and `constexpr` when the value is known at compile time. The signature is documentation: a `const` tells the reader "this won't change" without them having to scan the body, and the compiler enforces the promise.
+
+- **Local variables:** mark `const` if you never reassign — `const int width = 800;`. Use `constexpr` for compile-time constants: `constexpr float pi = 3.14159f;`.
+- **Value parameters:** `void render(const int frame)` documents that the function won't reassign `frame` internally. Apply to primitives and small structs the function only reads.
+- **Reference and pointer parameters:** already covered under "Function Parameters" — pass-by-const-reference is the default for non-mutating large types, `const T*` for non-mutating nullable inputs.
+- **Member functions:** any method that does not modify object state ends with `const` — `bool is_ready() const;`. This lets the method be called on a `const` instance and is a compiler-checked promise that no member is mutated.
+- **Don't `const` return-by-value:** `const int get_count()` is noise — the caller copies regardless. Reserve `const` on returns for `const T&` cases where you're returning a reference to internal data the caller shouldn't modify.
+
+This is **const-correctness**, a long-standing C++ practice. The cost is one keyword; the payoff is a compiler-checked contract, IDE assistance (immutables are often visually distinguished), safer refactors, and minor optimization opportunities. Apply it everywhere it doesn't fight you.
+
+## `[[nodiscard]]`
+
+Mark a function `[[nodiscard]]` when ignoring its return value is almost certainly a mistake. The compiler then warns at any call site that throws the result away.
+
+```cpp
+[[nodiscard]] bool should_close() const;
+[[nodiscard]] GLFWwindow* window() const { return glfw_window; }
+```
+
+Apply to:
+- **Const observers and getters** — their entire purpose is the return value. Calling `engine.should_close();` and ignoring the result does nothing useful.
+- **Error codes** — return values the caller must check (e.g., a function returning a status enum).
+- **Factory functions returning owned handles** — forgetting to capture the result is a resource leak.
+- **Pure functions** — anything whose only effect is the return value.
+
+Skip on functions where ignoring the return is a legitimate option (e.g., a setter that also returns the previous value for callers that care).
+
+The attribute is zero cost: no runtime impact, no ABI change. The payoff is a class of bugs — "I forgot to use this result" — caught at compile time instead of at review or runtime. The standard library tagged many of its observers in C++17/20: `std::vector::empty()`, `std::async`, `std::launder`, and dozens more.
+
+In C++20 you can attach a reason: `[[nodiscard("the close flag must drive the main loop")]]`. Use sparingly — the bare attribute is usually self-explanatory.
+
 ## Visibility
 
 Default to `private`. Promote a member to `protected` only when there is a real subclass relationship that uses it; promote to `public` only for genuine cross-class API. Avoid `friend` — if `friend` feels right, the type probably needs to be split or the member made `public`.
@@ -507,6 +540,89 @@ class out_of_lives_flow : public base_flow { ... };
 ```
 
 In source files, include the matching `.hpp` first (a blank line apart from other includes — this verifies the header is self-sufficient). Match the existing project's grouping convention for the remaining includes.
+
+## Class Member Ordering
+
+Inside a class body, order declarations by audience: **most-callers first, implementation last.**
+
+- **Visibility:** `public:` first, then `protected:`, then `private:`. The header reads as a contract — what the consumer can do comes before how the class is built.
+- **Within each visibility section**, in this order:
+  1. Nested types and `using` aliases.
+  2. Constructors.
+  3. Destructor.
+  4. Deleted copy/move operators.
+  5. Other methods.
+  6. Data members.
+
+```cpp
+class foo
+{
+public:
+    enum class status { ... };          // 1. nested types
+
+    foo();                              // 2. constructor
+    ~foo();                             // 3. destructor
+
+    foo(const foo&) = delete;           // 4. deleted copies
+    foo& operator=(const foo&) = delete;
+
+    void do_something();                // 5. other methods
+    bool is_ready() const;
+
+private:
+    void helper();                      // 5. private methods first
+    int counter = 0;                    // 6. data members last
+    bool ready = false;
+};
+```
+
+The rationale: someone opening the header wants to know **what** the class does before **how** it stores state. Methods are the contract; data members are implementation detail. Putting members at the bottom signals "you don't need to read this to use the class."
+
+This is the dominant C++ convention — Google C++ Style Guide, LLVM coding standards, Chromium, Folly, and most major open-source projects follow it. The opposite order (members first) is rare and usually only appears in C-style aggregates that have no methods to begin with.
+
+## Header vs Source
+
+Default: function bodies live in the `.cpp`. The header declares the interface; the source provides the implementation.
+
+Exceptions, where the body belongs in the header:
+- **Trivial accessors** — one-line getters and setters whose body is a single load, store, or comparison. `GLFWwindow* window() const { return glfw_window; }` is the canonical case. Putting it in the header lets the optimizer inline the call and saves a separate `.cpp` definition.
+- **`constexpr` functions** — must be visible at every call site that uses them at compile time.
+- **Templates** — must be visible at every instantiation point.
+
+Don't push real method bodies into the header. The cost — every translation unit that includes the header re-parses the body, every body edit forces all includers to recompile, and the body's transitive `#include`s leak into the header's consumers — outweighs the marginal inlining benefit. With link-time optimization (LTO) enabled, the optimizer can inline across translation units anyway.
+
+When you define a body in a header outside the class body, you must mark it `inline` explicitly or the linker will reject multiple definitions. Functions defined *inside* the class body, `constexpr` functions, and templates are implicitly `inline` — no keyword needed.
+
+## Function Ordering
+
+When function A calls B and C, define A above B and C in the file. Apply recursively — if B then calls D and E, put B above D and E. The level of detail decreases as the reader scrolls down: entry point at the top, helpers below, leaf-level utilities at the bottom.
+
+This is the **Stepdown Rule** (Robert C. Martin, *Clean Code*), sometimes called **newspaper structure**: a source file reads top-to-bottom like a news article — headline and lead paragraph first, supporting paragraphs after. The reader meets each function just before encountering the code that depends on it, so the question "what does this helper do?" is answered by glancing a few lines down rather than searching the file.
+
+```cpp
+// GOOD — caller above its callees
+void process_frame()
+{
+    update_simulation();
+    render();
+}
+
+void update_simulation() { ... }
+void render() { ... }
+
+// BAD — bottom-up forces the reader to scroll to find context
+void render() { ... }
+void update_simulation() { ... }
+void process_frame() { ... }
+```
+
+For class methods: same idea. Public methods appear in the order a caller would meet them; private helpers go below the public methods that call them. When private helpers call each other, the higher-level helper still comes first.
+
+For class members and file-scope variables: declare each just above the first function that uses it, ordered by first reference.
+
+C++-specific practical note: the Stepdown Rule applies inside class bodies, where the compiler resolves member references regardless of definition order — stepdown is free there.
+
+For free functions and file-private helpers (`static` at file scope) within a `.cpp` file, **the callee must be defined above the caller** — the compiler resolves names top-to-bottom in a translation unit. Do not work around this with forward declarations inside the same `.cpp`; declaration/definition separation belongs between `.hpp` and `.cpp`, never within a single source file. In this one case, dependency order beats stepdown order.
 
 ## Object Lifetime and Resources
 
