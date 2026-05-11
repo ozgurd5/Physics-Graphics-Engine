@@ -169,39 +169,39 @@ There is **no GameObject / Entity / Scene abstraction**. The simulation grid *is
 ```
 while (!engine.should_close())
 {
-    dt = now - lastTime;
+    delta_time = now - last_time;
 
-    if (autoOmega) ctx->omega = 2 / (1 + sin(π / ctx->x));
+    if (auto_omega) fluid_context->omega = 2 / (1 + sin(π / fluid_context->x));
 
-    for (s = 0; s < substepsPerFrame; ++s)
-        fluid_step(ctx, params, scenario);          // physics
+    for (s = 0; s < substeps_per_frame; ++s)
+        fluid_step(fluid_context, params, scenario);    // physics
 
     engine.begin_ui();
-    DrawControlPanel(ctrl, ctx, params);            // ImGui widgets
+    draw_control_panel(controls, fluid_context, params);  // ImGui widgets
 
-    if (requestReset || requestRebuildScenario)
+    if (request_reset || request_rebuild_scenario)
         scenario = reload_scenario(...);            // memset + re-init
 
     // upload field data to GPU based on visualization mode
-    switch (ctrl.mode) {
-        case smoke:                   engine.update_field(ctx->smoke, ...)
-        case pressure:                scan_min_max(...); engine.update_field(ctx->p, ...)
+    switch (controls.mode) {
+        case smoke:                   engine.update_field(fluid_context->smoke, ...)
+        case pressure:                scan_min_max(...); engine.update_field(fluid_context->p, ...)
         case velocity_magnitude:
-        case field_plus_vectors:      compute_velocity_magnitude(...); engine.update_field(velMag, ...)
+        case field_plus_vectors:      compute_velocity_magnitude(...); engine.update_field(velocity_magnitudes, ...)
         case velocity_vectors_only:   (skip field)
     }
     if (mode == velocity_vectors_only || field_plus_vectors)
-        engine.update_arrows(ctx->u, ctx->v, ..., arrowStride, arrowScale);
+        engine.update_arrows(fluid_context->u, fluid_context->v, ..., arrow_stride, arrow_scale);
 
-    engine.draw(ctrl.mode);                         // GL passes + ImGui render + swap
+    engine.draw(controls.mode);                     // GL passes + ImGui render + swap
     // update window title with FPS every 0.5s
 }
-fluid_destroy_context(ctx);
+fluid_destroy_context(fluid_context);
 ```
 
-Physics and graphics share **one timestep**: each rendered frame runs `substepsPerFrame` (default 5) physics steps with `ctx->dt` (default 0.016s). There is no fixed-timestep accumulator, no decoupled physics thread, no interpolation — when you raise substeps, the sim runs faster wall-clock; when you raise dt, the sim's *physical* time per step grows.
+Physics and graphics share **one timestep**: each rendered frame runs `substeps_per_frame` (default 5) physics steps with `fluid_context->dt` (default 0.016s). There is no fixed-timestep accumulator, no decoupled physics thread, no interpolation — when you raise substeps, the sim runs faster wall-clock; when you raise dt, the sim's *physical* time per step grows.
 
-### Control panel — `DrawControlPanel()` at [main.cpp:130](src/main.cpp#L130)
+### Control panel — `draw_control_panel()` in [main.cpp](src/main.cpp)
 
 Live-tunable knobs:
 - Visualization mode (5 radio buttons).

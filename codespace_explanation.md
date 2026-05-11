@@ -1,10 +1,14 @@
 # Graphics Engine — Function-Level Walkthrough
 
-A deep look at six functions in the renderer, layer by layer: what the C++ does, what OpenGL does, what the GPU does, and the subtleties that aren't obvious from the code.
+A deep look at the two C++ source files, layer by layer: what the C++ does, what OpenGL does, what the GPU does, what crosses the C/C++ boundary into the physics engine, and the subtleties that aren't obvious from the code.
 
-The six functions covered: `compile_shader`, `create_quad`, `create_arrow_buffer`, `update_field`, `create_field_texture`, `update_arrows`.
+Two parts:
+- **Part 1 — `graphics_engine.{hpp,cpp}`**: the renderer. Six functions: `compile_shader`, `create_quad`, `create_arrow_buffer`, `update_field`, `create_field_texture`, `update_arrows`.
+- **Part 2 — `main.cpp`**: the application driver. The `extern "C"` interop with the C physics engine, file-scope defaults, the `runtime_controls` struct, the helper functions (`pick_solver`, `pick_precond`, `scan_min_max`, `compute_velocity_magnitude`, `reload_scenario`), the ImGui control panel (`draw_control_panel`), and the `main()` frame loop.
 
 ---
+
+# Part 1 — `graphics_engine.{hpp,cpp}`
 
 ## `compile_shader`
 
@@ -497,3 +501,652 @@ If you read them in order, three recurring patterns appear:
 2. **State machine usage.** Almost every OpenGL call leans on the "currently bound" object. `glBindTexture`, `glBindBuffer`, `glBindVertexArray`, `glUseProgram` — each one updates a global slot. Then state-setting calls (`glTexParameteri`, `glVertexAttribPointer`, etc.) target whatever was last bound. This is why bookkeeping discipline matters in OpenGL — leaving the wrong object bound can break the next unrelated call.
 
 3. **The CPU drives, the GPU executes.** The CPU side composes commands and uploads data. The GPU side runs shader programs on many cores in parallel against that data. The two sides communicate only through buffers and textures (data) and uniforms (small per-draw parameters). Nothing in these six functions actually *runs* on the GPU — they all just prepare GPU resources. The execution happens later in `draw`.
+
+---
+
+# Part 2 — `main.cpp`
+
+`main.cpp` is the **glue layer** between two worlds. On one side is the C physics engine (`src/fluid_physics/`, read-only, written in C11). On the other is the C++ renderer (`graphics_engine.{hpp,cpp}`, covered in Part 1). `main.cpp` wires them together, owns the UI state, runs the per-frame loop, and serves as the program's entry point.
+
+Top-down, it contains:
+- An `extern "C"` block that pulls in the C physics headers.
+- File-scope `constexpr` constants for window size, fluid defaults, and timing.
+- A `runtime_controls` struct holding the UI's mutable state.
+- Two dispatcher helpers: `pick_solver`, `pick_precond`.
+- Two data-shaping helpers for the renderer: `scan_min_max`, `compute_velocity_magnitude`.
+- A simulation-reset helper: `reload_scenario`.
+- The ImGui widget submitter: `draw_control_panel`.
+- `main()` — initialization, frame loop, cleanup.
+
+---
+
+## The `extern "C"` block
+
+```cpp
+extern "C"
+{
+    #include "types.h"
+    #include "core.h"
+    #include "scenarios.h"
+    #include "preconditioners.h"
+}
+```
+
+**Job:** make C functions callable from C++ code despite the two languages having different rules for how function symbols appear in object files.
+
+### Why this exists — name mangling
+
+C++ supports function overloading: two functions with the same name but different parameter types coexist as distinct functions. The linker doesn't natively understand "two functions with the same name," so the compiler decorates each function's symbol with extra characters that encode its full type. This decoration is called **name mangling**.
+
+A C++ function declared as `void fluid_step(FluidContext*, ScenarioParams, Scenario)` becomes a symbol like `_Z10fluid_stepP12FluidContext14ScenarioParams8Scenario` in the compiled `.o` file. Different overloads → different mangled symbols → no ambiguity at link time.
+
+**C has no name mangling.** `fluid_step` in C is just `fluid_step` in the binary. The C compiler emitted that exact symbol when it compiled `core.c`.
+
+Now consider compiling `main.cpp` without `extern "C"`:
+1. The C++ compiler reads `core.h` and sees `void fluid_step(...)`.
+2. It assumes (correctly for a C++ context) that the function is C++ code.
+3. At the call site `fluid_step(fluid_context, params, scenario);`, it emits a call to `_Z10fluid_step...` (the mangled name).
+4. The linker tries to resolve `_Z10fluid_step...` — but the actual symbol in `core.c.o` is just `fluid_step`. **Link error: undefined symbol.**
+
+`extern "C"` is the fix. It tells the C++ compiler: "the names inside this block use **C linkage** — do not mangle them, look them up under their bare names." With `extern "C"` wrapping the header, the C++ compiler emits a call to `fluid_step` directly, the linker finds the C-compiled symbol, everything connects.
+
+### Why the headers were not authored with `extern "C"` already
+
+In a properly-designed C library meant to be consumable from both C and C++, the header would self-protect with:
+
+```c
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ... declarations ...
+
+#ifdef __cplusplus
+}
+#endif
+```
+
+This guard would make the header work seamlessly from C (where `extern "C"` doesn't exist) and from C++ (where it kicks in). The fluid physics headers don't have this guard — they were written purely with C consumers in mind. So the **C++ caller is responsible for wrapping the include**, which is what `main.cpp` does.
+
+### A second thing the wrapper does
+
+Beyond suppressing name mangling, `extern "C"` also forces the declarations inside to follow **C calling convention**. The differences between C and C++ calling conventions are minor on most platforms — argument passing, register usage — but they exist. Wrapping the headers ensures the C++ side calls the C functions the way the C compiler expected them to be called.
+
+### What's actually in those four headers
+
+- `types.h` — the core struct `FluidContext` and the function-pointer typedefs `PressureSolver` and `Preconditioner`.
+- `core.h` — declares `fluid_create_context`, `fluid_destroy_context`, `fluid_step`, `fluid_setup_physics`, and the three solver functions.
+- `scenarios.h` — declares the `Scenario` struct, the `ScenarioType` enum, and `load_scenario`.
+- `preconditioners.h` — declares the three preconditioner functions and the `PrecondType` enum.
+
+All four are pulled in because `main.cpp` references types or functions from each.
+
+---
+
+## File-scope constants
+
+```cpp
+constexpr float pi = 3.14159265358979323846f;
+
+constexpr int window_width = 800;
+constexpr int window_height = 800;
+constexpr const char* window_title = "Fluid Simulation";
+
+constexpr size_t default_grid_size = 256;
+constexpr float default_dt = 0.016f;
+// ... more defaults ...
+
+constexpr double title_update_interval = 0.5;
+```
+
+`constexpr` declares a value **known at compile time**. The compiler can substitute it into call sites directly — no runtime storage allocated, no memory address, no overhead at run time. It's the modern, type-safe replacement for C-style `#define` constants.
+
+What lives here:
+- **`pi`** — used by the auto-omega formula in the frame loop. `float` precision is sufficient for this calculation.
+- **Window dimensions and title** — passed to `graphics_engine`'s constructor once at startup. Centralizing them at file scope makes them easy to change without hunting through the code.
+- **Fluid defaults** — passed to `fluid_create_context` once. They document the simulation's initial state.
+- **`title_update_interval`** — the gap (in seconds) between FPS updates in the window titlebar. Half a second is fast enough to feel live and slow enough that the number doesn't flicker.
+
+The cost is zero at runtime. Every reference to `window_width` becomes the literal `800` at compile time.
+
+---
+
+## `runtime_controls` struct
+
+```cpp
+struct runtime_controls
+{
+    visual_mode mode = visual_mode::smoke;
+    ScenarioType scenario_type = KARMAN_VORTEX;
+    int substeps_per_frame = 5;
+    int arrow_stride = 8;
+    float arrow_scale = 0.04f;
+    bool auto_omega = true;
+    bool request_reset = false;
+    bool request_rebuild_scenario = false;
+
+    int solver_index = 0;
+    int preconditioner_index = 1;
+};
+```
+
+A passive data struct. Public fields, no methods, no invariants — exactly the AGENTS.md description of a `struct` rather than a `class`.
+
+The struct's role: **hold the UI's mutable state across frames.** Every field falls into one of two categories:
+
+**Persistent settings** — the user's choices that survive frame-to-frame. `mode` (which visualization), `scenario_type` (which test case), `substeps_per_frame` (how fast to sim), `arrow_stride` / `arrow_scale` (how dense the arrows are), `auto_omega` (whether to recompute SOR's omega), `solver_index` / `preconditioner_index` (which physics implementations).
+
+**One-shot flags** — set by a button click on one frame, consumed by the main loop the next frame, then cleared. `request_reset` and `request_rebuild_scenario` work this way.
+
+Each field has an **inline default** (the `= value` next to the declaration). When `main()` writes `runtime_controls controls;`, the resulting object starts with every field initialized to its default — no constructor needed. This is the AGENTS.md "default member initializers" rule in action; the alternative (constructors that initialize each field) would mean adding code that future-you might forget to update when adding a new field.
+
+The choice of `int` for `solver_index` / `preconditioner_index` rather than a proper enum is dictated by **ImGui's API**: `ImGui::Combo` takes an `int*` and writes the selected index back. Passing an enum pointer wouldn't compile. So we keep the int, then convert to a function pointer (via `pick_solver` / `pick_precond`) at the use site.
+
+---
+
+## `pick_solver` and `pick_precond`
+
+```cpp
+[[nodiscard]] PressureSolver pick_solver(const int index)
+{
+    switch (index)
+    {
+        case 1: return solve_pressure_rbgs;
+        case 2: return solve_pressure_sor;
+        default: return solve_pressure_pcg;
+    }
+}
+```
+
+Map an integer (the user's combo-box selection) to a **function pointer** — the address of an actual physics function defined in C.
+
+### What a function pointer is
+
+`PressureSolver` is a `typedef` in `types.h` for a function-pointer type — roughly:
+
+```c
+typedef void (*PressureSolver)(FluidContext* ctx, float* p, const float* div);
+```
+
+Reading the typedef: "PressureSolver is a name for the type `pointer to a function that takes (FluidContext*, float*, const float*) and returns void`."
+
+When the C compiler compiled `solve_pressure_pcg`, it placed the function's machine code at some address in the binary's `.text` section. That address — say `0x400a20` — is what a `PressureSolver` variable holds. Calling through the pointer (`ctx->pressure_solver(ctx, p, div)`) just performs an indirect jump to that address.
+
+### Why this is useful
+
+Inside `fluid_step`, the physics engine doesn't know which solver will run. It just calls `ctx->pressure_solver(...)`. The actual function is whichever one we plugged in via `fluid_setup_physics` or by direct assignment.
+
+This is **runtime polymorphism without classes**. C++ would use virtual functions or `std::function` to achieve the same thing. C uses raw function pointers. Either way, the runtime decision of "which implementation to call" is made by changing a pointer rather than by writing branching code inside the caller.
+
+### Why `[[nodiscard]]`
+
+If you call `pick_solver` and throw away the return value, you've done nothing useful. The whole point is the function pointer it returns. `[[nodiscard]]` makes the compiler warn when a call site ignores the return.
+
+`pick_precond` follows the exact same pattern for preconditioners.
+
+---
+
+## `scan_min_max`
+
+```cpp
+void scan_min_max(const float* data, const size_t count, float& out_min, float& out_max);
+```
+
+Walk an array of floats once, find the smallest and largest values, return them through reference parameters.
+
+### The +/- infinity trick
+
+```cpp
+out_min = +infinity;
+out_max = -infinity;
+for each value:
+    if (value < out_min) out_min = value;
+    if (value > out_max) out_max = value;
+```
+
+Starting from `+infinity` for the min and `-infinity` for the max is a small idiom that avoids a "first iteration" special case. Any real number is less than `+infinity` and greater than `-infinity`, so the first value seen will replace both initial values correctly. Without this trick you'd need either a flag for "have we seen any values yet" or a separate first-iteration assignment.
+
+`std::numeric_limits<float>::infinity()` produces the IEEE-754 positive infinity bit pattern (all exponent bits set, all mantissa bits zero). Comparing any finite float to it works as expected.
+
+### The NaN/Inf fallback
+
+```cpp
+if (!std::isfinite(out_min) || !std::isfinite(out_max))
+{
+    out_min = 0.0f;
+    out_max = 1.0f;
+}
+```
+
+If the simulation produces NaN or Inf values (which can happen for unstable parameter combinations — extreme dt, low viscosity, certain solver/scenario combos), the scan would propagate them into the range. The renderer would then divide by NaN, the colormap would crash or display garbage.
+
+Falling back to `[0, 1]` keeps the renderer working. The user sees a uniform color (probably the midpoint of the colormap) instead of a crash — and can recover by hitting Reset.
+
+This is one of the few places in the code where defensive programming is justified: an external system (the C solver) can hand us pathological values, and we're at the boundary.
+
+### Why reference parameters
+
+`out_min` and `out_max` are **reference parameters**, written `float&`. The function modifies the caller's variables in place. The signature says "these are non-nullable lvalues you'll receive output through." If we'd used `float*`, the signature would have said "null is OK," which it isn't.
+
+Could the function return a `struct { float min; float max; }` instead? Yes, and that would arguably be cleaner. The current code prefers the out-parameter idiom — that's a stylistic choice consistent with the rest of the file.
+
+---
+
+## `compute_velocity_magnitude`
+
+```cpp
+void compute_velocity_magnitude(const FluidContext* fluid_context, float* out,
+                                float& out_min, float& out_max);
+```
+
+Walk every cell in the simulation grid, compute the magnitude of the velocity vector at that cell, write it into `out[]`, and report the min/max along the way.
+
+### The staggered-grid average
+
+```cpp
+const float u_center = 0.5f * (fluid_context->u[i * height + j] +
+                               fluid_context->u[(i + 1) * height + j]);
+const float v_center = 0.5f * (fluid_context->v[i * height_plus_one + j] +
+                               fluid_context->v[i * height_plus_one + (j + 1)]);
+```
+
+The fluid physics uses a **staggered MAC grid**: u-velocity values live on the vertical faces between columns of cells; v-velocity values live on the horizontal faces between rows. There's no "u at cell (i, j)" — there's u at the left face and u at the right face.
+
+To get a cell-centered velocity (what the renderer wants to display), we **average the two adjacent face values**. For cell `(i, j)`:
+- u_center = average of u at face `i` (left) and u at face `i+1` (right).
+- v_center = average of v at face `j` (bottom) and v at face `j+1` (top).
+
+The indexing `i * height + j` and `i * height_plus_one + j` reflects the array sizes — the u array has size `(width+1) * height` (one extra column for the right-most face), and the v array has size `width * (height+1)` (one extra row for the top face).
+
+Why staggered? Numerical stability in the pressure-velocity coupling. The physics engine's job; the renderer's job is just to undo the staggering for display.
+
+### The magnitude computation
+
+```cpp
+const float magnitude = std::sqrt(u_center * u_center + v_center * v_center);
+out[i * height + j] = magnitude;
+if (magnitude < out_min) out_min = magnitude;
+if (magnitude > out_max) out_max = magnitude;
+```
+
+Pythagorean theorem on the velocity components. Write the result to the cell-centered output array. Update min/max in the same pass — no second walk needed.
+
+### A subtle additional guard
+
+```cpp
+if (!std::isfinite(out_min) || !std::isfinite(out_max) || out_max <= out_min)
+{
+    out_min = 0.0f;
+    out_max = 1.0f;
+}
+```
+
+The extra condition `out_max <= out_min` handles the case where every cell has the **same** magnitude — including the all-zero case right after a reset. Without this guard, range = 0, and the fragment shader's normalization (raw - range_min) / (range_max - range_min) would divide by zero. Falling back to `[0, 1]` keeps things stable.
+
+This is one of the **hot loops** in the application — runs every frame in the velocity-magnitude and field+vectors modes. For a 256×256 grid, that's ~65,000 iterations per frame. The compiler will likely vectorize the inner arithmetic with SIMD.
+
+---
+
+## `reload_scenario`
+
+```cpp
+[[nodiscard]] Scenario reload_scenario(FluidContext* fluid_context,
+                                        ScenarioParams& params,
+                                        const ScenarioType type,
+                                        const PressureSolver solver,
+                                        const PrecondType precond);
+```
+
+Reset the simulation to a fresh state and reconfigure it for a chosen scenario.
+
+### Step 1: zero everything
+
+```cpp
+std::memset(fluid_context->u, 0, u_count * sizeof(float));
+std::memset(fluid_context->v, 0, v_count * sizeof(float));
+std::memset(fluid_context->p, 0, cells * sizeof(float));
+// ... 10 more arrays ...
+```
+
+`std::memset(ptr, byte_value, count)` writes `count` copies of `byte_value` starting at `ptr`. We pass `0` as the byte value, so every byte gets cleared.
+
+This works for our purposes because:
+- **`float` zero** in IEEE-754 is all bits zero — so `memset(ptr, 0, n*sizeof(float))` does correctly zero out an array of floats.
+- **`uint8_t solid` zero** means "this cell is fluid, not solid" — exactly what we want for a fresh start.
+
+`memset` is **dramatically faster than a per-element loop** because modern implementations use SIMD or even non-temporal stores to clear large regions. For our 256×256 grid with 13 arrays each holding 256KB+, the savings are substantial. The C++ standard library detail: most implementations of `memset` are written in hand-optimized assembly per CPU architecture.
+
+We can use `memset` here because all these arrays are **plain old data** (`float` or `uint8_t`). For a C++ object array with destructors or non-trivial copy semantics, `memset` would corrupt the objects. Floats and bytes have no such concerns.
+
+### Step 2: re-init for the chosen scenario
+
+```cpp
+Scenario scenario = load_scenario(type, fluid_context, &params);
+fluid_setup_physics(fluid_context, params, solver, precond);
+scenario.init(fluid_context, params);
+return scenario;
+```
+
+- `load_scenario` reads the `ScenarioType` enum and returns a `Scenario` struct containing three function pointers: `init`, `apply_sources`, `apply_boundaries`. Each scenario (Lid-Driven, Karman, Airfoil, Urban City) has its own set of three functions; `load_scenario` picks the right trio.
+- `fluid_setup_physics` plugs in the chosen pressure solver and preconditioner, and computes scenario-derived parameters (e.g., the Reynolds number from the inlet velocity and grid scale).
+- `scenario.init(fluid_context, params)` runs the scenario's one-time setup: placing obstacles in the `solid` mask, optionally seeding the initial smoke field, etc.
+
+The returned `Scenario` struct is the caller's only handle to the scenario's per-step callbacks (`apply_sources`, `apply_boundaries`). `fluid_step` needs it every frame.
+
+### Why `[[nodiscard]]`
+
+Forgetting to capture the return would silently break the simulation — `fluid_step` would call whatever stale `Scenario` struct main has. The attribute forces a compile warning at any call site that drops the return.
+
+### Why `ScenarioParams& params` and not `ScenarioParams* p`
+
+References are non-null, pointers can be null. The scenario init code dereferences `params` unconditionally — null would crash. Encoding "this can't be null" in the type catches misuse at the call site rather than in production.
+
+---
+
+## `draw_control_panel`
+
+```cpp
+void draw_control_panel(runtime_controls& controls, FluidContext* fluid_context,
+                        ScenarioParams& params);
+```
+
+Issue all the ImGui widget calls for this frame's control panel.
+
+### Immediate-mode UI
+
+Most UI libraries are **retained-mode**: you describe a widget tree once (a window, with buttons and labels), the library stores it, you wire up event handlers for clicks, and the library renders the tree until you change it.
+
+ImGui is **immediate-mode**. There is no stored widget tree. Every frame, you describe the entire UI from scratch by calling functions. Widget state, event handling, and rendering are all combined into a sequence of plain function calls. If you don't call `ImGui::Button("Reset")` this frame, no button gets drawn this frame.
+
+Every ImGui function does two things simultaneously:
+1. **Submits geometry** — adds vertices to ImGui's internal vertex buffer (which will be uploaded and drawn when `ImGui::Render` runs later).
+2. **Handles input** — reads the current mouse/keyboard state and decides whether the user just interacted with this widget.
+
+So `ImGui::Button("Reset")`:
+- Pushes vertices for a button-shaped rectangle and the text "Reset" into the vertex buffer.
+- Checks if the mouse is hovering over those vertices and if it was clicked.
+- Returns `true` once if the click happened, `false` otherwise.
+
+### Reading state vs writing state
+
+For display-only widgets, you just call them:
+
+```cpp
+ImGui::Text("Reynolds: %.2f", fluid_context->reynolds);
+ImGui::Text("OpenMP threads: %d", omp_get_max_threads());
+```
+
+These read from C++ state and submit text geometry. No state is mutated.
+
+For widgets that let the user **modify** state, you pass a pointer (or reference, for some types) to the variable they should write back to:
+
+```cpp
+ImGui::SliderFloat("Inlet Velocity", &params.inlet_velocity, 0.0f, 5.0f);
+```
+
+The slider reads `params.inlet_velocity` to know where its handle should start, and writes back to that same memory location if the user drags it.
+
+Some widgets return `true` on change and let you react inline:
+
+```cpp
+if (ImGui::Combo("Pressure Solver", &controls.solver_index, solver_items, IM_ARRAYSIZE(solver_items)))
+    fluid_context->pressure_solver = pick_solver(controls.solver_index);
+```
+
+The body runs only on the frame the user actually changed the combo — most frames it's a no-op.
+
+### `static` arrays
+
+```cpp
+static const char* scenario_items[] = { "Lid-Driven", "Karman Vortex", "Airfoil", "Urban City" };
+```
+
+A `static` local variable persists across calls — allocated once, never re-initialized. Without `static`, we'd create this array every frame (~60 times per second). With `static`, it's created once and reused. The contents never change, so this is safe and cheap.
+
+### Conditional widgets
+
+```cpp
+ImGui::Checkbox("Auto Omega", &controls.auto_omega);
+if (controls.auto_omega)
+    ImGui::Text("Omega: %.4f (auto)", fluid_context->omega);
+else
+    ImGui::SliderFloat("Omega", &fluid_context->omega, 1.0f, 1.99f);
+```
+
+The slider only exists when the checkbox is off. When it's on, a read-only text display takes its place. In retained-mode UIs this would require creating and destroying widget objects on every toggle. In immediate-mode, you just `if`/`else` your function calls — the widget only gets submitted when the branch is taken.
+
+Same idea for the Karman obstacle controls — they only appear when the Karman scenario is selected.
+
+### The integer trampoline pattern
+
+```cpp
+int mode = (int)controls.mode;
+ImGui::RadioButton("Smoke", &mode, (int)visual_mode::smoke);
+ImGui::RadioButton("Pressure", &mode, (int)visual_mode::pressure);
+// ...
+controls.mode = (visual_mode)mode;
+```
+
+`ImGui::RadioButton` takes `int*` (the selected value) and `int` (this radio's value). Our `controls.mode` is a `visual_mode` enum, not an int. So we:
+1. Copy the enum's integer value into a temporary `mode`.
+2. Pass `&mode` to each radio button — they all modify the same temporary.
+3. Cast the temporary back to the enum and store it.
+
+This is the **integer trampoline** that immediate-mode-meets-strongly-typed-enum forces on us. The cost is one int copy per frame; the readability win of keeping `controls.mode` strongly typed is worth it.
+
+### One-shot button flags
+
+```cpp
+if (ImGui::Button("Reset"))
+    controls.request_reset = true;
+```
+
+`ImGui::Button` returns `true` exactly once — on the frame the click happened. We use that to set a flag on the controls struct. The main loop reads the flag next, takes the action (calling `reload_scenario`), and clears the flag. This separates "user requested" from "action taken" by exactly one frame, which is fine for human-interactive purposes.
+
+---
+
+## `main` — the application entry point
+
+This is where everything comes together. The function divides into three phases: **initialization**, the **frame loop**, and **cleanup**.
+
+### Initialization
+
+```cpp
+graphics_engine engine(window_width, window_height, window_title);
+```
+
+Constructs the renderer on the stack. The constructor — covered in Part 1 — initializes GLFW, creates the window, loads OpenGL function pointers, compiles the shaders, builds the quad geometry, sets up the dynamic arrow buffer, and initializes ImGui. Everything graphical comes online here.
+
+`engine` is a **stack variable**. When `main` exits, its destructor runs automatically, releasing every GPU resource, the GLFW window, and the ImGui context. This is RAII (Part 1 covers the pattern in detail).
+
+```cpp
+FluidContext* fluid_context = fluid_create_context(
+    default_grid_size, default_grid_size,
+    default_dt, default_dx,
+    default_density, default_viscosity,
+    default_poisson_iter, default_threshold);
+```
+
+Asks the C physics engine to heap-allocate a `FluidContext`. This is **C code, not C++**. The returned pointer points at memory allocated by C's `calloc` (inside the physics implementation). There is no destructor. We must call `fluid_destroy_context` ourselves to free it — which we do, manually, at the bottom of `main`.
+
+```cpp
+runtime_controls controls;
+ScenarioParams params;
+Scenario scenario = reload_scenario(fluid_context, params, controls.scenario_type,
+                                     pick_solver(controls.solver_index),
+                                     pick_precond(controls.preconditioner_index));
+```
+
+Three more stack values. `controls` and `params` default-construct (their fields take their inline defaults). `scenario` is initialized by `reload_scenario`, which clears every array in the fluid context and re-runs the chosen scenario's init.
+
+```cpp
+std::vector<float> velocity_magnitudes((size_t)fluid_context->num_cells, 0.0f);
+```
+
+Pre-allocate the work buffer that `compute_velocity_magnitude` will fill. Sized to one float per simulation cell. Allocating it **once**, outside the loop, avoids re-allocating heap memory every frame.
+
+The `std::vector` constructor used here takes `(count, initial_value)` — allocates a buffer of `num_cells` floats, all initialized to `0.0f`.
+
+```cpp
+double last_time = glfwGetTime();
+double title_timer = 0.0;
+```
+
+GLFW provides a monotonic clock via `glfwGetTime()` — returns seconds since GLFW was initialized as a `double`. We use this for frame-time measurement and FPS calculation.
+
+### The frame loop
+
+```cpp
+while (!engine.should_close())
+```
+
+`should_close()` asks GLFW whether the user has signaled close (clicked the X, hit Alt+F4, etc.). GLFW polls window events when we call `glfwPollEvents` later in the frame; that's when the close flag gets set. After the flag is set, `should_close()` returns `true` and the loop exits.
+
+#### Time delta
+
+```cpp
+const double now = glfwGetTime();
+const double delta_time = now - last_time;
+last_time = now;
+```
+
+Measure how long the previous frame took. `delta_time` is the wall-clock time between the start of this frame and the start of the previous frame. Used for the FPS readout and for the title-update timer — not for the physics, which uses its own fixed `dt`.
+
+#### Auto-omega
+
+```cpp
+if (controls.auto_omega)
+    fluid_context->omega = 2.0f / (1.0f + std::sin(pi / (float)fluid_context->x));
+```
+
+If auto-omega is enabled, recompute the optimal SOR relaxation parameter every frame. The formula `2 / (1 + sin(π / N))` is the theoretical optimum for SOR on an N×N regular grid. Recomputing per frame is cheap (one sin, one division) and ensures the value stays right even if the user rebuilds the scenario at a different grid size.
+
+#### Physics steps
+
+```cpp
+for (int s = 0; s < controls.substeps_per_frame; ++s)
+    fluid_step(fluid_context, params, scenario);
+```
+
+Run the simulation one or more times. Each `fluid_step` advances the simulation by `fluid_context->dt` simulated seconds — for the default `dt = 0.016`, one step covers 16ms of simulated time.
+
+This is **physics-render decoupling by design**: simulated time is independent of wall-clock time. With `substeps_per_frame = 5`, each rendered frame advances the simulation by ~80ms of simulated time. The sim plays back faster than real-time. Lower the substeps and the sim slows down.
+
+A real-time game engine would typically use a **fixed-timestep accumulator** pattern that keeps simulated time in sync with wall-clock time even when frames take variable amounts of real time. This is a visualization tool, not a game — we don't care about sync.
+
+#### ImGui frame
+
+```cpp
+engine.begin_ui();
+draw_control_panel(controls, fluid_context, params);
+```
+
+`begin_ui()` opens the ImGui frame — sets up internal state so the upcoming ImGui calls have something to write into. Then `draw_control_panel` issues every widget call. After it returns, all UI input has been collected and all UI geometry has been submitted into ImGui's internal vertex buffer.
+
+#### Reset handling
+
+```cpp
+if (controls.request_reset || controls.request_rebuild_scenario)
+{
+    scenario = reload_scenario(...);
+    controls.request_reset = false;
+    controls.request_rebuild_scenario = false;
+}
+```
+
+The control panel's "Reset" and "Rebuild Solids" buttons set these flags. The main loop consumes them here: zero the sim, re-init, clear the flags so the reset only happens once.
+
+Note: this comes **after** the physics step but before the render. So in the reset-frame, the physics ran one last step on the old data, then we resetted everything before drawing. The very next frame, the renderer sees the freshly-reset state.
+
+#### Field upload by mode
+
+```cpp
+const int width = (int)fluid_context->x;
+const int height = (int)fluid_context->y;
+
+switch (controls.mode)
+{
+    case visual_mode::smoke:
+        engine.update_field(fluid_context->smoke, width, height, 0.0f, 1.0f);
+        break;
+    // ...
+}
+```
+
+Based on the user's choice of visualization, decide what data to upload to the field texture:
+- **Smoke** — upload the smoke density field directly. Range is fixed `[0, 1]` because smoke is bounded.
+- **Pressure** — scan the pressure field for its actual min/max, fallback to `[0, 1]` if the range is degenerate, then upload.
+- **Velocity magnitude** and **Field + Vectors** — compute per-cell magnitudes into the pre-allocated work buffer, then upload. Both visualization modes share this branch via case fall-through (the C++ way of saying "two cases, same body").
+- **Vectors only** — no field upload at all. The renderer will skip the field pass.
+
+#### Arrow buffer rebuild
+
+```cpp
+if (controls.mode == visual_mode::velocity_vectors_only ||
+    controls.mode == visual_mode::field_plus_vectors)
+    engine.update_arrows(fluid_context->u, fluid_context->v, width, height,
+                         controls.arrow_stride, controls.arrow_scale);
+```
+
+For the two modes that draw arrows, rebuild the arrow VBO from the current velocity field. (Covered in detail in Part 1.)
+
+#### Draw
+
+```cpp
+engine.draw(controls.mode);
+```
+
+Run the actual GL render passes — clear, conditional field pass, conditional arrow pass, ImGui draw data, swap buffers, poll events. This is the moment when all the work accumulated this frame becomes visible on screen.
+
+`glfwPollEvents()` inside `draw` is the call that drains the OS event queue — keyboard, mouse, window close requests, resize events. This is where `should_close()` actually learns the user clicked the X.
+
+#### Title update
+
+```cpp
+title_timer += delta_time;
+if (title_timer > title_update_interval)
+{
+    char title_buffer[80];
+    std::snprintf(title_buffer, sizeof(title_buffer),
+                  "Fluid Simulation - %.1f FPS",
+                  1.0 / (delta_time > 0.0 ? delta_time : 1.0));
+    glfwSetWindowTitle(engine.window(), title_buffer);
+    title_timer = 0.0;
+}
+```
+
+Accumulate elapsed time in `title_timer`. When it crosses the threshold (half a second), format the current FPS into a stack-allocated `char[80]` buffer using `snprintf` (safe — it truncates rather than overflows), then ask GLFW to update the titlebar.
+
+The `delta_time > 0.0 ? delta_time : 1.0` guard avoids a divide-by-zero on the very first frame when `delta_time` could be `0`.
+
+After the update, reset `title_timer` so we wait another half-second.
+
+### Cleanup
+
+```cpp
+fluid_destroy_context(fluid_context);
+return 0;
+```
+
+After the frame loop exits, free the C-side fluid context. This calls the C engine's deallocator, which frees every internal array.
+
+Then `main` returns. The C++ stack locals destruct in **reverse order of construction**:
+1. `velocity_magnitudes` — `std::vector` destructor frees the heap buffer.
+2. `scenario` — trivial destruct (just function pointers).
+3. `params` — trivial destruct.
+4. `controls` — trivial destruct.
+5. `engine` — destructor runs: shuts down ImGui, deletes every GL handle, destroys the GLFW window, calls `glfwTerminate`.
+
+The fact that `engine` constructs first and destructs last is the standard RAII pattern: the longest-lived resource is the outermost. By the time `main` returns its `0`, every resource is released and the process exits cleanly.
+
+---
+
+## Patterns across main.cpp
+
+Three themes recur through the file:
+
+1. **One-frame propagation.** UI changes don't take effect instantly — they're stored as struct fields, then read by the main loop on the next iteration. `request_reset` is set by an ImGui button on frame N, the reload happens on frame N+1. This decoupling keeps the ImGui call sequence linear (no callbacks reaching into other systems) and makes the data flow easy to reason about.
+
+2. **The C/C++ seam.** `extern "C"`, `FluidContext*` lifetime managed by hand, `memset` on plain-data arrays, function pointers as runtime polymorphism — all the C-isms cluster around the boundary with the physics engine. On the C++ side, `engine` and `velocity_magnitudes` use RAII; on the C side, the context is heap-allocated and explicitly freed. The file is the only place these two worlds touch.
+
+3. **The renderer is a slave to the sim.** Every frame: simulate first, then look at what the user wants to see, prepare exactly that data for the GPU, then draw. The renderer never asks the simulation for anything; the application drives the data flow. Switching visualization modes is a CPU-side `switch` statement deciding which field to upload — the renderer is the same shape whether we're showing smoke or pressure or velocity arrows.
