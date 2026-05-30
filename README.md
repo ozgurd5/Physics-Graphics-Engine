@@ -4,6 +4,8 @@ An interactive, real-time 2D incompressible fluid simulator with a live OpenGL v
 
 The physics engine lives under `src/fluid_physics/` as a Git submodule pointing at [atahancetindemir/fluid-graphics](https://github.com/atahancetindemir/fluid-graphics).
 
+![Urban city velocity magnitude](screenshots/urban-velocity.png)
+
 ## Highlights
 
 - 2D incompressible Navier–Stokes on a staggered MAC grid
@@ -23,6 +25,8 @@ The physics engine lives under `src/fluid_physics/` as a Git submodule pointing 
 | **Vectors Only** | Velocity arrows on a black background. |
 | **Field + Vectors** | Velocity magnitude heatmap overlaid with arrows. |
 
+![Lid-driven cavity in smoke mode](screenshots/lid-driven-smoke.png)
+
 ## Scenarios
 
 | Scenario | Description |
@@ -33,6 +37,8 @@ The physics engine lives under `src/fluid_physics/` as a Git submodule pointing 
 | **Urban City** | Channel flow through a synthetic urban geometry (multiple blocky obstacles). |
 
 Switching the scenario at runtime resets the simulation state and rebuilds the solid mask.
+
+![Kármán vortex street in smoke mode](screenshots/karman-vortex-smoke.png)
 
 ## How It Works
 
