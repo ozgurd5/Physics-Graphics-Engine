@@ -1,0 +1,4 @@
+[submodule "src/fluid_physics"]
+	path = src/fluid_physics
+	url = https://github.com/atahancetindemir/fluid-graphics.git
+	branch = main
