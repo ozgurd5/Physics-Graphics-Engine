@@ -46,14 +46,15 @@ Switching the scenario at runtime resets the simulation state and rebuilds the s
 
 Each `fluid_step` performs the classical projection method on a MAC staggered grid:
 
-1. Apply scenario sources (inlet velocity, body forces).
-2. Diffuse velocity — explicit or implicit, chosen automatically from the diffusion number.
-3. Advect velocity with semi-Lagrangian self-advection.
+1. Apply scenario sources (inlet velocity, body forces) and boundary conditions.
+2. Advect velocity with semi-Lagrangian self-advection.
+3. Diffuse velocity — explicit or implicit, chosen automatically from the diffusion number.
 4. Compute divergence of the intermediate field.
 5. Solve `∇²p = ρ/dt · ∇·u*` with the selected solver (PCG / RBGS / SOR).
 6. Subtract `∇p` to project velocity onto the divergence-free subspace.
-7. Apply boundary conditions (no-slip on the solid mask, inflow/outflow on domain edges).
-8. Advect the smoke tracer.
+7. Advect the smoke tracer.
+
+Boundary conditions (no-slip on the solid mask, inflow/outflow on domain edges) are re-applied after each sub-step.
 
 Velocities live on a staggered MAC grid (`u` on horizontal faces, `v` on vertical faces, pressure at cell centers), which gives a clean second-order divergence/gradient stencil and avoids the checkerboard pressure mode. Solvers and preconditioners are stored as function pointers on the `FluidContext`, so swapping them at runtime is a single assignment.
 
